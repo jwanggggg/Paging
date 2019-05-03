@@ -24,8 +24,11 @@ public class Machine {
     static File randomNumbers = new File("random-numbers.txt");
 
     // Data structures
-    LinkedList<Integer> LRUqueue; // Tracks which process is LRU
+    LinkedList<Process> LRUqueue; // Tracks which process is LRU
+    LinkedList<Process> FIFOqueue; // Tracks with process is FIFO
+
     List<Process> processList;
+    List<List<Integer>> pageTable;
     List<Integer> occupiedPages; // records which pages are occupying which pages. 0 indicates untaken.
     List<Integer> occupiedFrames; // records which frames are being occupied. 0 indicates untaken.
     int nextFrameIndex; // indicates which frame index in occupiedFrames should be referenced next.
@@ -35,6 +38,7 @@ public class Machine {
     public Machine() {
         this.LRUqueue = new LinkedList<>();
         this.processList = new ArrayList<>();
+        this.pageTable = new ArrayList<>();
         this.occupiedPages = new ArrayList<>();
         this.occupiedFrames = new ArrayList<>();
         this.terminatedProcesses = new HashSet<>();
@@ -50,6 +54,10 @@ public class Machine {
 
         for (int i = 0; i < this.numPages; i++) {
             this.occupiedPages.add(0);
+            List<Integer> frameTable = new ArrayList<>();
+            for (int j = 0; j < this.numFrames; j++)
+                frameTable.add(-1);
+            this.pageTable.add(frameTable);
         }
 
         for (int i = 0; i < this.numFrames; i++) {
@@ -59,36 +67,40 @@ public class Machine {
         switch (jobMix) {
             // Job mix 1 - 1/0/0, one process
             case 1:
-                Process p1 = new Process();
+                Process p1 = new Process(numFrames);
                 p1.probA = 1;
                 p1.probB = 0;
                 p1.probC = 0;
+                p1.processNumber = 1;
                 processList.add(p1);
                 break;
             // Job mix 2 - 1/0/0 for each, four processes
             case 2:
                 for (int i = 0; i < 4; i++) {
-                    Process p2 = new Process();
+                    Process p2 = new Process(numFrames);
                     p2.probA = 1;
                     p2.probB = 0;
                     p2.probC = 0;
+                    p2.processNumber = i + 1;
                     processList.add(p2);
                 }
                 break;
             // Job mix 3 - 0/0/0 (random), four processes
             case 3:
                 for (int i = 0; i < 4; i++) {
-                    Process p3 = new Process();
+                    Process p3 = new Process(numFrames);
                     p3.probA = 0;
                     p3.probB = 0;
                     p3.probC = 0;
+                    p3.processNumber = i + 1;
                     processList.add(p3);
                 }
                 break;
             // Job mix 4 - different probs for each, four processes
             case 4:
                 for (int i = 0; i < 4; i++) {
-                    Process p4 = new Process();
+                    Process p4 = new Process(numFrames);
+                    p4.processNumber = i + 1;
                     switch (i) {
                         case 0:
                             p4.probA = .75;
@@ -120,18 +132,22 @@ public class Machine {
 
         switch (replaceAlgo) {
             case "lru":
+                System.out.println("RUNNING LRU");
                 LRU(new Scanner(randomNumbers));
                 break;
             case "random":
-                // random();
+                System.out.println("RUNNING RANDOM");
+                // random(new Scanner(randomNumbers));
                 break;
             case "fifo":
-                // fifo();
+                System.out.println("RUNNING FIFO");
+                fifo(new Scanner(randomNumbers));
                 break;
         }
 
     } // end run method
     
+    // LRU
     public void LRU(Scanner randomScanner) {
         // Main process loop
         
@@ -139,11 +155,10 @@ public class Machine {
             for (int processNum = 1; processNum <= this.processList.size(); processNum++) {
                 int count = 0;
                 Process currProcess = this.processList.get(processNum - 1);
-                int frameIndex = this.nextFrameIndex;
 
                 // only calculate this if first time running
                 if (currProcess.nextWord == -1) {
-                    int firstWord = (111 * processNum) % processSize; 
+                    int firstWord = (111 * processNum + processSize) % processSize; 
                     currProcess.nextWord = firstWord;
                 }
 
@@ -152,63 +167,80 @@ public class Machine {
                     continue;
 
                 while (count++ < Machine.quantum && this.cycle <= this.totalRunTime) {
+                    int frameIndex = this.nextFrameIndex;
                     int firstNum = randomScanner.nextInt();
-                    int pageReferenced = currProcess.nextWord / this.pageSize;
+                    int pageIndex = currProcess.nextWord / this.pageSize;
 
-                    System.out.print((processNum) + " references word " + currProcess.nextWord + " (page " + pageReferenced +
+                    System.out.print((processNum) + " references word " + currProcess.nextWord + " (page " + pageIndex +
                     ") at time " + this.cycle + ": ");
 
                     // Check if the page is occupied.
-                    if (this.occupiedPages.get(pageReferenced) == 0) {
-                        System.out.print("Fault, ");
-                        
-                        // Page fault: limit reached
-                        if (this.numOccupiedPages == this.numFrames) {
-                            // Evict the least recently used.
-                            int evicted = LRUqueue.poll();
-                            System.out.print("evicting " + evicted + "\n");
-                            this.LRUqueue.add(processNum);
-                        }
-                        // Page fault: frame unused 
-                        else {
-                            System.out.print("using free frame " + (numFrames - 1) +"\n");
-                            this.numOccupiedPages++;
-                            // Update the LRU queue.
-                            this.LRUqueue.add(processNum);
-                        }
-                        this.occupiedPages.set(pageReferenced, processNum);
+                    List<Integer> frameTable = this.pageTable.get(pageIndex);
+                    // System.out.println(frameTable);
+
+                    if (frameTable.get(frameIndex) == -1 && this.numOccupiedPages < this.numFrames) {
+                        currProcess.LRUframe = frameIndex;
+                        currProcess.LRUpage = pageIndex;
+                        currProcess.nextFrame = frameIndex;
+
+                        // Page fault: frame unused
+                        System.out.print("Fault, using free frame " + (frameIndex) +"\n");
+                        this.numOccupiedPages++;
+                        // Update the LRU queue.
+                      
+                        this.LRUqueue.add(currProcess);
+                        frameTable.set(frameIndex, processNum);
                     }
+                    
                     // Check if it's occupied by a DIFF number and the numFrames is at max.
-                    else if (this.occupiedPages.get(pageReferenced) != (processNum) && this.numOccupiedPages == this.numFrames) {
-                        int evicted = LRUqueue.poll();
-                        System.out.print("Fault, EVICT page 0 of " + evicted + " from frame " + frameIndex + "\n");
-                        this.occupiedPages.set(pageReferenced, processNum);
-                        this.LRUqueue.add(processNum);
+                    else if ((frameTable.get(frameIndex) != (processNum) && this.numOccupiedPages == this.numFrames) ||
+                    (frameTable.get(frameIndex) == -1 && this.numOccupiedPages < this.numFrames)) {
+                        Process evicted = this.LRUqueue.poll();
+                        System.out.print("Fault, EVICT page " + evicted.LRUpage + " of " + 
+                        evicted.processNumber + " from frame " + evicted.LRUframe + "\n");
+                        
+                        currProcess.LRUframe = frameIndex;
+                        currProcess.LRUpage = pageIndex;
+                        currProcess.nextFrame = frameIndex;
+
+                        this.LRUqueue.add(currProcess);
+                        frameTable.set(frameIndex, processNum);
                     }
 
                     // Otherwise, hit and proceed as normal. 
                     // Find the hit processNum in the LRUQueue and move it to the front.
                     else {
-                        int hitIndex = this.LRUqueue.indexOf(processNum);
-                        int hitProcess = this.LRUqueue.remove(hitIndex);
-                        this.LRUqueue.add(hitProcess);
-                        System.out.print("Hit in frame " + frameIndex + "\n");
+                        
+                        for (int i = 0; i < this.LRUqueue.size(); i++) {
+                            Process p = this.LRUqueue.get(i);
+                            if (p.processNumber == currProcess.processNumber) {
+                                Process hitProcess = this.LRUqueue.remove(i);
+                                this.LRUqueue.add(hitProcess);
+                                frameTable.set(frameIndex, currProcess.processNumber);
+                                System.out.print("Hit in frame " + frameIndex + "\n");
+                            }
+                        }
+
                     }
 
                     double y = firstNum / (Integer.MAX_VALUE + 1d);
                     
                     int nextWord;
-                    if (y < currProcess.probA) {
-                        nextWord = (currProcess.nextWord + 1) % processSize;
+                    double A = currProcess.probA;
+                    double B = currProcess.probB;
+                    double C = currProcess.probC;
+                    if (y < A) {
+                        nextWord = (currProcess.nextWord + 1 + processSize) % processSize;
                         currProcess.nextWord = nextWord;
-                    } else if (y < currProcess.probA + currProcess.probB) {
-                        nextWord = (currProcess.nextWord - 5) % processSize;
+                    } else if (y < A + B) {
+                        nextWord = (currProcess.nextWord - 5 + processSize) % processSize;
                         currProcess.nextWord = nextWord;
-                    } else if (y < currProcess.probA + currProcess.probB + currProcess.probC) {
-                        nextWord = (currProcess.nextWord + 4) % processSize;
-                    } else {
-                        nextWord = 1;
-                        System.out.println("CASE D WAS USED");
+                    } else if (y < A + B + C) {
+                        nextWord = (currProcess.nextWord + 4 + processSize) % processSize;
+                        currProcess.nextWord = nextWord;
+                    } else if (y >= A + B + C) {
+                        nextWord = randomScanner.nextInt() % (this.processSize);
+                        currProcess.nextWord = nextWord;
                     }
                     
                     this.cycle++;
@@ -221,15 +253,146 @@ public class Machine {
                         break;
                     }
 
+                    if (this.cycle == 8)
+                        System.exit(0);
+    
                 } // end while count < 3
                 
                 this.nextFrameIndex--;
                 if (this.nextFrameIndex == -1)
-                    this.nextFrameIndex = this.numFrames - 1;
-
+                    this.nextFrameIndex = this.numFrames - 1;                
+                
             } // end for process
         } // end while cycle
 
+    }
+
+    // Random: pick a random occupied to evict
+    public void random(Scanner randomScanner) {
+        
+    }
+
+    // FIFO: should use a queue
+    public void fifo(Scanner randomScanner) {
+        while (this.cycle <= this.totalRunTime) {
+            for (int processNum = 1; processNum <= this.processList.size(); processNum++) {
+                int count = 0;
+                Process currProcess = this.processList.get(processNum - 1);
+
+                // only calculate this if first time running
+                if (currProcess.nextWord == -1) {
+                    int firstWord = (111 * processNum + processSize) % processSize; 
+                    currProcess.nextWord = firstWord;
+                }
+
+                // Skip if terminated
+                if (terminatedProcesses.contains(processNum))
+                    continue;
+
+                while (count++ < Machine.quantum && this.cycle <= this.totalRunTime) {
+                    int frameIndex = this.nextFrameIndex;
+                    int firstNum = randomScanner.nextInt();
+                    int pageIndex = currProcess.nextWord / this.pageSize;
+
+                    System.out.print((processNum) + " references word " + currProcess.nextWord + " (page " + pageIndex +
+                    ") at time " + this.cycle + ": ");
+
+                    // Check if the page is occupied.
+                    List<Integer> frameTable = this.pageTable.get(pageIndex);
+                    // System.out.println(frameTable);
+
+                    if (frameTable.get(frameIndex) == -1 && this.numOccupiedPages < this.numFrames) {
+                        currProcess.LRUframe = frameIndex;
+                        currProcess.LRUpage = pageIndex;
+                        currProcess.nextFrame = frameIndex;
+
+                        // Page fault: frame unused
+                        System.out.print("Fault, using free frame " + (frameIndex) +"\n");
+                        this.numOccupiedPages++;
+                        // Update the LRU queue.
+                      
+                        this.LRUqueue.add(currProcess);
+                        frameTable.set(frameIndex, processNum);
+                    }
+                    
+                    // Check if it's occupied by a DIFF number and the numFrames is at max.
+                    else if ((frameTable.get(frameIndex) != (processNum) && this.numOccupiedPages == this.numFrames) ||
+                    (frameTable.get(frameIndex) == -1 && this.numOccupiedPages < this.numFrames)) {
+                        Process evicted = this.LRUqueue.poll();
+                        System.out.print("Fault, EVICT page " + evicted.LRUpage + " of " + 
+                        evicted.processNumber + " from frame " + evicted.LRUframe + "\n");
+                        
+                        currProcess.LRUframe = frameIndex;
+                        currProcess.LRUpage = pageIndex;
+                        currProcess.nextFrame = frameIndex;
+
+                        this.LRUqueue.add(currProcess);
+                        frameTable.set(frameIndex, processNum);
+                    }
+
+                    // Otherwise, hit and proceed as normal. 
+                    // Find the hit processNum in the LRUQueue and move it to the front.
+                    else {
+                        
+                        System.out.print("Hit in frame " + frameIndex + "\n");
+
+                        // for (int i = 0; i < this.LRUqueue.size(); i++) {
+                        //     Process p = this.LRUqueue.get(i);
+                        //     if (p.processNumber == currProcess.processNumber) {
+                        //         Process hitProcess = this.LRUqueue.remove(i);
+                        //         this.LRUqueue.add(hitProcess);
+                        //         frameTable.set(frameIndex, currProcess.processNumber);
+                        //         System.out.print("Hit in frame " + frameIndex + "\n");
+                        //     }
+                        // }
+
+                    }
+
+                    double y = firstNum / (Integer.MAX_VALUE + 1d);
+                    
+                    int nextWord;
+                    double A = currProcess.probA;
+                    double B = currProcess.probB;
+                    double C = currProcess.probC;
+                    if (y < A) {
+                        nextWord = (currProcess.nextWord + 1 + processSize) % processSize;
+                        currProcess.nextWord = nextWord;
+                    } else if (y < A + B) {
+                        nextWord = (currProcess.nextWord - 5 + processSize) % processSize;
+                        currProcess.nextWord = nextWord;
+                    } else if (y < A + B + C) {
+                        nextWord = (currProcess.nextWord + 4 + processSize) % processSize;
+                        currProcess.nextWord = nextWord;
+                    } else if (y >= A + B + C) {
+                        nextWord = randomScanner.nextInt() % (this.processSize);
+                        currProcess.nextWord = nextWord;
+                    }
+                    
+                    this.cycle++;
+
+                    // Increment the numTimesReferenced of the process in processList.
+                    // If the limit is reached, add it to terminatedProcesses
+                    currProcess.numTimesReferenced++;
+                    if (currProcess.numTimesReferenced == numReferences) {
+                        terminatedProcesses.add(processNum);
+                        break;
+                    }
+
+                    // if (this.cycle == 8)
+                    //     System.exit(0);
+    
+                } // end while count < 3
+                
+                this.nextFrameIndex--;
+                if (this.nextFrameIndex == -1)
+                    this.nextFrameIndex = this.numFrames - 1;                
+                
+            } // end for process
+        } // end while cycle
+    }
+
+    public void printStats() {
+        
     }
 
 }
